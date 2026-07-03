@@ -1,0 +1,528 @@
+---
+title: "Environmental Statistics"
+subtitle: 'Lecture 9: Bootstrapping (and jackknife)'
+author:
+- "Ikedichi Edward Azuh"
+- "Carsten Dormann"
+
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+# 1. Overview
+
+In environmental and biological statistics, we are often interested in estimating quantities such as means, regression coefficients, or more complex indices derived from data. However, in most real-world settings the true sampling distribution of these estimators is unknown or analytically intractable.
+
+Classical approaches to uncertainty quantification rely on strong assumptions (e.g. normality, independence, or linear approximations via Taylor expansion). These assumptions are frequently violated in environmental data, especially in the presence of non-linearity, spatial dependence, or complex summary statistics.
+
+This lecture introduces **resampling-based methods for uncertainty quantification**, focusing on bootstrapping as a practical and widely applicable alternative to analytical error propagation.
+
+We also briefly introduce the jackknife as a related, simpler resampling technique.
+
+In this lecture we cover:
+
+-   The need for uncertainty quantification in statistical estimation
+-   Classical error propagation and its limitations (Taylor approximation)
+-   The bootstrap: idea, algorithm, and interpretation
+-   Bootstrap-based standard errors and confidence intervals
+-   Bootstrap applications: means, regression models, and complex indices
+-   Limitations of the bootstrap  
+-   The jackknife: leave-one-out resampling and variance estimation
+-   Comparison of uncertainty estimates from OLS, jackknife, and bootstrap
+-   Practical implementation in R using for-loops and simulation-based inference 
+
+## 2. Why do we need bootstrapping?
+
+In many statistical applications, we estimate a quantity of interest (mean, regression coefficient, or derived index), but the sampling distribution of this estimator is unknown.
+
+Classical statistical inference relies on:
+
+-  Large-sample approximations (Central Limit Theorem)
+-  Strong distributional assumptions (e.g. normality)
+-  Simplified variance formulas
+
+However, in environmental and biological systems:
+
+-  models are often nonlinear
+-  data may be dependent or heterogeneous
+-  derived statistics can be highly complex
+
+As a result, analytical formulas for uncertainty often become unreliable or unavailable.
+
+This motivates a **data-driven approach to uncertainty estimation**.
+
+
+# 3. Classical uncertainty propagation
+
+A standard approach to uncertainty quantification is based on **error propagation**.
+
+For a function of multiple variables:
+
+\[
+I = f(x_1, x_2, \dots, x_p)
+\]
+
+a first-order Taylor expansion gives:
+
+\[
+\mathrm{Var}(I) \approx \nabla f^\top \Sigma \nabla f
+\]
+
+where:
+
+-  \(\nabla f\) is the gradient of \(f\)
+-  \(\Sigma\) is the covariance matrix of the inputs
+
+### Limitations
+
+This approach becomes problematic when:
+
+-  \(f(\cdot)\) is highly nonlinear
+-  \(f(\cdot)\) includes discontinuities (e.g. min/max functions)
+-  \(f(\cdot)\) is defined via simulation or iterative algorithms
+-  covariance structure is unknown or complex
+
+
+
+# 4. Idea of bootstrapping + intuition
+
+Bootstrapping provides a **simulation-based alternative**.
+
+Instead of deriving uncertainty analytically, we approximate it empirically by resampling the observed data.
+
+## Core idea
+
+The empirical distribution of the sample is used as a proxy for the unknown population distribution.
+
+## Visual intuition: How bootstrapping works
+
+```{r bootstrap-diagram, echo=FALSE, message=FALSE}
+library(igraph)
+
+nodes <- data.frame(
+  name = c("Original data", "Resample 1", "Resample 2", "Resample B", "Statistic")
+)
+
+edges <- data.frame(
+  from = c("Original data","Original data","Original data",
+           "Resample 1","Resample 2","Resample B"),
+  to   = c("Resample 1","Resample 2","Resample B",
+           "Statistic","Statistic","Statistic")
+)
+
+g <- graph_from_data_frame(edges, vertices = nodes)
+
+plot(g,
+     vertex.size = 35,
+     vertex.label.cex = 0.8,
+     edge.arrow.size = 0.4,
+     main = "Bootstrap idea: resample --> recompute --> summarize")
+
+```
+
+# 5. Bootstrap algorithm
+
+Given observed data \(x = (x_1, \dots, x_n)\):
+
+1.  Draw a bootstrap sample \(x^*\) of size \(n\) **with replacement**
+2.  Compute the statistic of interest:
+   \[
+   \hat{\theta}^* = s(x^*)
+   \]
+3.  Repeat steps 1–2 for \(B\) iterations
+4.  Obtain the bootstrap distribution of \(\hat{\theta}\)
+
+
+# 6. Interpretation of the bootstrap
+
+The bootstrap distribution approximates:
+
+-  the sampling distribution of the estimator
+-  the variability induced by repeated sampling
+
+From this distribution we can estimate:
+
+-  standard error
+-  bias
+-  confidence intervals
+
+# 7. Standard error and confidence intervals (Uncertainty measures)
+
+The bootstrap standard error is given by:
+
+\[
+SE(\hat{\theta}) = \mathrm{SD}(\hat{\theta}^*)
+\]
+
+For asymmetric distributions, percentile-based confidence intervals are used:
+
+\[
+CI_{95\%} = \left[ q_{0.025}, q_{0.975} \right]
+\]
+
+
+# 8. Environmental example: uncertainty in a spatial index
+
+We use the Meuse dataset (soil contamination data).
+
+Let \(Z_1, \dots, Z_n\) denote observed zinc concentrations and \(C_1, \dots, C_n\) observed copper concentrations. We define the environmental index:
+$$
+I = \frac{\bar{Z}}{\bar{C}}, \quad \text{where } \bar{Z} = \frac{1}{n}\sum_{i=1}^n Z_i,\; \bar{C} = \frac{1}{n}\sum_{i=1}^n C_i
+$$
+
+Such indices are common in:
+
+*  pollution assessment
+*  ecological risk scoring
+*  environmental monitoring
+ 
+
+## 8.1 Bootstrap mean (simulated example)
+
+```{r}
+set.seed(123)
+
+# ----------------------------
+# 1. Simulate "population"
+# ----------------------------
+mu_true <- 5
+sigma <- 2
+
+# sample (this is what students observe)
+x <- rnorm(50, mean = mu_true, sd = sigma)
+
+sample_mean <- mean(x)
+
+# ----------------------------
+# 2. Bootstrap
+# ----------------------------
+B <- 2000
+boot_means <- numeric(B)
+
+for (b in 1:B) {
+  x_star <- sample(x, replace = TRUE)
+  boot_means[b] <- mean(x_star)
+}
+
+boot_mean_est <- mean(boot_means)
+
+# ----------------------------
+# 3. Plot distribution
+# ----------------------------
+hist(boot_means,
+     breaks = 30,
+     col = "skyblue",
+     main = "Bootstrap distribution of the mean",
+     xlab = "Mean")
+
+abline(v = sample_mean, col = "red", lwd = 2)
+abline(v = boot_mean_est, col = "blue", lwd = 2)
+abline(v = mu_true, col = "darkgreen", lwd = 2, lty = 2)
+
+legend("topright",
+       legend = c("Sample mean", "Bootstrap mean", "True mean"),
+       col = c("red", "blue", "darkgreen"),
+       lwd = 2,
+       lty = c(1, 1, 2))
+
+
+sample_mean
+boot_mean_est
+sd(boot_means)
+quantile(boot_means, c(0.025, 0.975))
+
+```
+
+
+## 8.2 Bootstrap estimate from meuse data
+
+```{r}
+library(sp)
+data(meuse)
+coordinates(meuse) <- ~x+y
+
+zinc <- meuse$zinc
+copper <- meuse$copper
+
+set.seed(123)
+
+B <- 2000
+boot_I <- numeric(B)
+
+for (b in 1:B) {
+  idx <- sample(1:length(zinc), replace = TRUE)
+  boot_I[b] <- mean(zinc[idx]) / mean(copper[idx])
+}
+
+hist(boot_I,
+     main = "Bootstrap distribution of environmental index",
+     xlab = "Zinc / Copper")
+
+quantile(boot_I, c(0.025, 0.975))
+sd(boot_I)
+```
+
+
+## 8.3 Bootstrap regression model
+
+```{r}
+set.seed(123)
+
+df <- data.frame(
+  x = rnorm(50),
+  y = rnorm(50)
+)
+
+B <- 1000
+boot_beta <- numeric(B)
+
+for (b in 1:B) {
+  idx <- sample(1:nrow(df), replace = TRUE)
+  model <- lm(y ~ x, data = df[idx, ])
+  boot_beta[b] <- coef(model)[2]
+}
+
+sd(boot_beta)
+quantile(boot_beta, c(0.025, 0.975))
+```
+
+## 8.4 Bootstrap of a derived index
+
+Consider a nonlinear estimator:
+
+$$I = \frac{\bar{a}}{\bar{b}}$$
+
+
+```{r}
+set.seed(123)
+
+a <- 1:10
+b <- runif(10)
+
+B <- 1000
+boot_I <- numeric(B)
+
+for (i in 1:B) {
+  a_sam <- sample(a, replace = TRUE)
+  b_sam <- sample(b, replace = TRUE)
+  boot_I[i] <- mean(a_sam) / mean(b_sam)
+}
+
+quantile(boot_I, c(0.025, 0.975))
+sd(boot_I)
+```
+
+# 9. When bootstrapping fails
+
+Bootstrapping is powerful, but not universally valid.
+
+It can fail or become unreliable when:
+
+*  sample size is very small
+*  observations are autocorrelated (time series, spatial data)
+*  distributions are heavy-tailed or unstable
+
+In these cases, standard bootstrap procedures may underestimate uncertainty.
+
+## Solution
+
+To address these issues, modified resampling methods are used:
+
+-  block bootstrap (time dependence)
+-  spatial bootstrap (spatial dependence)
+-  stratified bootstrap (heterogeneous populations)
+
+
+```{r}
+# Example
+
+set.seed(123)
+
+# Create autocorrelated time series (AR(1)-like process)
+n <- 50
+x <- numeric(n)
+x[1] <- rnorm(1)
+
+for (t in 2:n) {
+  x[t] <- 0.8 * x[t - 1] + rnorm(1)
+}
+
+# Naive bootstrap (WRONG for time series)
+B <- 1000
+boot_mean <- numeric(B)
+
+for (b in 1:B) {
+  x_sam <- sample(x, replace = TRUE)
+  boot_mean[b] <- mean(x_sam)
+}
+
+hist(boot_mean,
+     main = "Naive bootstrap (ignores autocorrelation)",
+     xlab = "Mean")
+
+```
+
+
+# 10. Jackknife
+
+The jackknife is a related resampling technique:
+
+*  systematically leave out one observation at a time
+*  recompute the estimator
+
+For $n$ observations:
+
+$$\hat{\theta}_{(i)} = s(x_{-i})$$
+
+The jackknife can be used to estimate:
+
+*  bias
+*  variance
+*  standard error (with correction)
+
+
+```{r}
+# Example
+
+set.seed(123)
+
+# Simple dataset
+x <- rnorm(30)
+y <- 2 * x + rnorm(30)
+
+n <- length(x)
+
+theta_hat <- coef(lm(y ~ x))[2]
+
+jack_theta <- numeric(n)
+
+for (i in 1:n) {
+  fit <- lm(y[-i] ~ x[-i])
+  jack_theta[i] <- coef(fit)[2]
+}
+
+# Jackknife estimate of SE
+theta_bar <- mean(jack_theta)
+
+jack_se <- sqrt((n - 1) / n * sum((jack_theta - theta_bar)^2))
+
+theta_hat
+jack_se
+
+```
+
+
+# 11 Comparison of Standard Errors: OLS, Jackknife, and Bootstrap
+
+
+```{r}
+set.seed(123)
+
+# Simulated data (simple but realistic)
+n <- 40
+x <- rnorm(n)
+y <- 2 * x + rnorm(n)
+
+# -------------------------
+# 1. Classical OLS SE
+# -------------------------
+fit <- lm(y ~ x)
+ols_se <- summary(fit)$coefficients[2, 2]
+ols_beta <- coef(fit)[2]
+
+# -------------------------
+# 2. Jackknife SE
+# -------------------------
+jack_beta <- numeric(n)
+
+for (i in 1:n) {
+  fit_i <- lm(y[-i] ~ x[-i])
+  jack_beta[i] <- coef(fit_i)[2]
+}
+
+jack_mean <- mean(jack_beta)
+jack_se <- sqrt((n - 1) / n * sum((jack_beta - jack_mean)^2))
+
+# -------------------------
+# 3. Bootstrap SE
+# -------------------------
+B <- 1000
+boot_beta <- numeric(B)
+
+for (b in 1:B) {
+  idx <- sample(1:n, replace = TRUE)
+  fit_b <- lm(y[idx] ~ x[idx])
+  boot_beta[b] <- coef(fit_b)[2]
+}
+
+boot_se <- sd(boot_beta)
+
+# -------------------------
+# 4. Comparison
+# -------------------------
+results <- data.frame(
+  Method = c("OLS", "Jackknife", "Bootstrap"),
+  SE = c(ols_se, jack_se, boot_se)
+)
+
+results
+
+
+```
+
+
+```{r, fig.height=4, fig.width=5}
+se_values <- c(
+   OLS = ols_se,
+   Jackknife = jack_se,
+   Bootstrap = boot_se
+ )
+
+
+plot(
+  se_values,
+  pch = 19,
+  col = c("black", "orange", "blue"),
+  cex = 2,
+  xaxt = "n",   # remove default x-axis
+  ylim = c(0.16, 0.20),
+  main = "Comparison of Standard Errors",
+  ylab = "SE of slope (β₁)",
+  xlab = ""
+)
+
+axis(1, at = 1:3, labels = names(se_values))
+
+text(1:3, se_values,
+     labels = round(se_values, 3),
+     pos = 3,
+     cex = 1.1)
+```
+
+We compare standard errors obtained from three different approaches: classical OLS theory, the jackknife, and the bootstrap. While OLS relies on model assumptions, both jackknife and bootstrap estimate uncertainty directly from resampling the observed data.
+
+In well-specified linear models, all three methods tend to agree. Larger differences would indicate model misspecification or dependence structures.
+
+
+# 12 Summary/Takeaway
+
+Bootstrapping provides a general, simulation-based framework for statistical inference.
+
+Instead of deriving uncertainty analytically, we approximate it by repeatedly resampling the observed data and recomputing the estimator.
+
+It is:
+
+-  simple to implement
+-  flexible for complex statistics
+-  applicable when analytical solutions fail
+-  computational rather than assumption-driven
+
+In practice, if you can compute a statistic, you can bootstrap it.
